@@ -110,16 +110,24 @@ async def trigger_scheduled_check(authorization: str = Header(None)):
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
         )
 
-    # Only run inside your active window (in your timezone, not the server's)
-    now = datetime.now(TIMEZONE)
-    if not (ACTIVE_START_HOUR <= now.hour < ACTIVE_END_HOUR):
-        logger.info("Scheduled check skipped at %s (outside active window)", now)
-        return {"status": "skipped", "reason": "Outside active window"}
-
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not chat_id:
         logger.error("TELEGRAM_CHAT_ID is not set")
         raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID is not set")
+
+    # Only run inside your active window (in your timezone, not the server's)
+    now = datetime.now(TIMEZONE)
+    if not (ACTIVE_START_HOUR <= now.hour < ACTIVE_END_HOUR):
+        logger.info("Scheduled check skipped at %s (outside active window)", now)
+        # Still tell you the ping arrived, so you know the cron job is alive.
+        try:
+            send_telegram_message(
+                int(chat_id),
+                f"⏰ Ping received at {now:%H:%M} — outside active hours, check skipped.",
+            )
+        except Exception:
+            logger.exception("Failed to send ping notification")
+        return {"status": "skipped", "reason": "Outside active window"}
 
     try:
         # TODO: Put your background check logic here
