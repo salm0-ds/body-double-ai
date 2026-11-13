@@ -8,6 +8,7 @@ from datetime import datetime
 app = FastAPI()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+APPLE_SHORTCUT_SECRET = os.getenv("APPLE_SHORTCUT_SECRET")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 CRON_SECRET = os.getenv("CRON_SECRET", "some-secret-token")
@@ -81,12 +82,32 @@ async def telegram_webhook(request: Request):
             
     return {"status": "ok"}
 
+@app.post("/youtube-opened")
+async def youtube_reminder(authorization: str = Header(None)):
+   if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
+      raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
+        )
+
+   current_hour = datetime.now().hour
+   if not (8 <= current_hour < 24):
+      return {"status": "skipped", "reason": "Outside active 12-hour window"}
+
+   youtube_message = (
+      "Get off youtube!"
+   )
+
+   YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
+   send_telegram_message(YOUR_CHAT_ID, youtube_message)
+   
+   return {"status": "success", "message": "Check executed successfully"}
+
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):
   # Security check so random people can't trigger your bot
   if authorization != f"Bearer {CRON_SECRET}":
     raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
+        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized cron trigger"
     )
 
   # Optional: Restrict to your 12-hour active window (e.g., 8 AM to 8 PM)
@@ -97,7 +118,7 @@ async def trigger_scheduled_check(authorization: str = Header(None)):
   # TODO: Put your background check logic here
   # (e.g., check emails, scan tasks, and push a message to your Telegram)
   ai_summary_message = (
-      "🤖 **Automated Check:** Here is your scheduled update from your backend!"
+      "🤖 this is the new one **Automated Check:** Here is your scheduled update from your backend!"
   )
 
   # 3. Push the message straight to your personal Telegram chat ID
