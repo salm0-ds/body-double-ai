@@ -102,6 +102,26 @@ async def youtube_reminder(authorization: str = Header(None)):
    
    return {"status": "success", "message": "Check executed successfully"}
 
+@app.post("/youtube-closed")
+async def youtube_reminder(authorization: str = Header(None)):
+   if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
+      raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
+        )
+
+   current_hour = datetime.now().hour
+   if not (8 <= current_hour < 24):
+      return {"status": "skipped", "reason": "Outside active 12-hour window"}
+
+   youtube_message = (
+      "You closed youtube"
+   )
+
+   YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
+   send_telegram_message(YOUR_CHAT_ID, youtube_message)
+   
+   return {"status": "success", "message": "Check executed successfully"}
+
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):
   # Security check so random people can't trigger your bot
