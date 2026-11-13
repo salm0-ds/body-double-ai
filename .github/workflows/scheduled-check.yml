@@ -1,0 +1,21 @@
+name: Scheduled check
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"  # every 15 minutes (UTC)
+  workflow_dispatch:         # lets you run it by hand from the Actions tab
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install requests
+      - run: python backend/cron_trigger.py
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}

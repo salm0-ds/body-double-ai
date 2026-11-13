@@ -1,27 +1,41 @@
 import os
-import requests
 import json
+import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
+
+import requests
 from fastapi import FastAPI, Header, HTTPException, status, Request
-from datetime import datetime
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger("telegram-agent")
 
 app = FastAPI()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-CRON_SECRET = os.getenv("CRON_SECRET", "some-secret-token")
-
+# No default: if CRON_SECRET isn't set, the scheduled endpoint refuses every call.
+CRON_SECRET = os.getenv("CRON_SECRET")
+# Render servers run in UTC, so the active window uses your own timezone.
+TIMEZONE = ZoneInfo(os.getenv("TIMEZONE", "UTC"))
+ACTIVE_START_HOUR = int(os.getenv("ACTIVE_START_HOUR", "8"))
+ACTIVE_END_HOUR = int(os.getenv("ACTIVE_END_HOUR", "20"))
 
 
 def send_telegram_message(chat_id: int, text: str):
-    """Sends a text response back to the user on Telegram."""
+    """Sends a text response back to the user on Telegram. Raises on failure."""
     url = f"{TELEGRAM_API_URL}/sendMessage"
     payload = {
         "chat_id": chat_id,
         "text": text
     }
-    requests.post(url, json=payload)
+    response = requests.post(url, json=payload, timeout=10)
+    response.raise_for_status()
+    return response.json()
 
 def send_option_buttons(chat_id: int, question_text: str):
   """Sends a message with clickable Yes/No inline buttons."""
@@ -81,27 +95,42 @@ async def telegram_webhook(request: Request):
             
     return {"status": "ok"}
 
+@app.get("/health")
+async def health():
+    """Cheap endpoint the cron script can use to wake the app up."""
+    return {"status": "ok"}
+
+
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):
-  # Security check so random people can't trigger your bot
-  if authorization != f"Bearer {CRON_SECRET}":
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
-    )
+    # Security check so random people can't trigger your bot
+    if not CRON_SECRET or authorization != f"Bearer {CRON_SECRET}":
+        logger.warning("Scheduled check rejected: bad or missing token")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized"
+        )
 
-  # Optional: Restrict to your 12-hour active window (e.g., 8 AM to 8 PM)
-  current_hour = datetime.now().hour
-  if not (8 <= current_hour < 24):
-    return {"status": "skipped", "reason": "Outside active 12-hour window"}
+    # Only run inside your active window (in your timezone, not the server's)
+    now = datetime.now(TIMEZONE)
+    if not (ACTIVE_START_HOUR <= now.hour < ACTIVE_END_HOUR):
+        logger.info("Scheduled check skipped at %s (outside active window)", now)
+        return {"status": "skipped", "reason": "Outside active window"}
 
-  # TODO: Put your background check logic here
-  # (e.g., check emails, scan tasks, and push a message to your Telegram)
-  ai_summary_message = (
-      "🤖 **Automated Check:** Here is your scheduled update from your backend!"
-  )
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        logger.error("TELEGRAM_CHAT_ID is not set")
+        raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID is not set")
 
-  # 3. Push the message straight to your personal Telegram chat ID
-  YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
-  send_telegram_message(YOUR_CHAT_ID, ai_summary_message)
+    try:
+        # TODO: Put your background check logic here
+        # (e.g., check emails, scan tasks, and push a message to your Telegram)
+        ai_summary_message = (
+            "🤖 Automated Check: Here is your scheduled update from your backend!"
+        )
+        send_telegram_message(int(chat_id), ai_summary_message)
+    except Exception:
+        logger.exception("Scheduled check failed")
+        raise HTTPException(status_code=500, detail="Scheduled check failed")
 
-  return {"status": "success", "message": "Check executed successfully"}
+    logger.info("Scheduled check sent at %s", now)
+    return {"status": "success", "message": "Check executed successfully"}
