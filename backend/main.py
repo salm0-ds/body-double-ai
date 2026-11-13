@@ -10,7 +10,7 @@ app = FastAPI()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 APPLE_SHORTCUT_SECRET = os.getenv("APPLE_SHORTCUT_SECRET")
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
-
+NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 CRON_SECRET = os.getenv("CRON_SECRET", "some-secret-token")
 
 
@@ -45,6 +45,16 @@ def send_option_buttons(chat_id: int, question_text: str):
   response = requests.post(url, json=payload)
   return response.json()
 
+def get_notion_info():
+   home_page_id = "35122950-dc11-8046-b89f-d4c0370816db"
+   url = f"https://api.notion.com/v1/pages/{home_page_id}/markdown"
+   headers = {
+      "Notion-Version": "2026-03-11",
+      "Authorization": f"Bearer {NOTION_API_KEY}"
+      }
+   output = requests.get(url, headers=headers).text
+   return output
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     """
@@ -70,6 +80,9 @@ async def telegram_webhook(request: Request):
 
         if user_text.lower() == "check in":
             send_option_buttons(chat_id, "Have you completed your current task?")
+        if user_text.lower() == "notion":
+           output = get_notion_info()
+           send_option_buttons(chat_id, output)
         else:
         # General AI reply for other messages
             requests.post(
@@ -101,6 +114,7 @@ async def youtube_reminder(authorization: str = Header(None)):
    send_telegram_message(YOUR_CHAT_ID, youtube_message)
    
    return {"status": "success", "message": "Check executed successfully"}
+
 
 @app.post("/youtube-closed")
 async def youtube_reminder(authorization: str = Header(None)):
