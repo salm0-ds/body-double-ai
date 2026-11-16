@@ -116,7 +116,7 @@ async def youtube_reminder(authorization: str = Header(None),
 
    data = {
       "app_name": "YouTube",
-      "event_type": "open",
+      "event_type": "opened",
       "timestamp": datetime.utcnow().isoformat()
       }
     
