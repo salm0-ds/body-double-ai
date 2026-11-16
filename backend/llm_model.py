@@ -46,7 +46,7 @@ async def generate_body_double_nudge(current_task: str,
       model="gpt-5-mini",
       instructions=SYSTEM_PROMPT,
       input=(
-          f"Time: {current_time}. Supposed to be working on, youtube was opened."
+          f"Time is: {current_time}. Supposed to be working, youtube was opened."
       )
     )
   return response.output_text

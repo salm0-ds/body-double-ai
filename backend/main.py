@@ -102,8 +102,7 @@ async def telegram_webhook(request: Request):
 
 @app.post("/youtube-opened")
 async def youtube_reminder(authorization: str = Header(None), 
-                           supabase = create_db_conn(),
-                           chat_id = int(os.getenv("TELEGRAM_CHAT_ID"))
+                           supabase = create_db_conn()
                            ):
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
       raise HTTPException(
@@ -123,8 +122,10 @@ async def youtube_reminder(authorization: str = Header(None),
    supabase.table("app_activity_logs").insert(data).execute()
 
    youtube_message = generate_body_double_nudge()
+   TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
 
-   send_telegram_message(chat_id, youtube_message)
+   send_telegram_message(TELEGRAM_CHAT_ID, youtube_message)
+   print(youtube_message)
    
    return {"status": "success", "message": "Check executed successfully"}
 
