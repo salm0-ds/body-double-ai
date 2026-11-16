@@ -5,6 +5,9 @@ from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, status, Request
 from datetime import datetime
 
+from database_conn import create_db_conn
+from llm_model import generate_body_double_nudge
+
 app = FastAPI()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
@@ -55,6 +58,8 @@ def get_notion_info():
    output = requests.get(url, headers=headers).text
    return output
 
+
+
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
     """
@@ -96,22 +101,30 @@ async def telegram_webhook(request: Request):
     return {"status": "ok"}
 
 @app.post("/youtube-opened")
-async def youtube_reminder(authorization: str = Header(None)):
+async def youtube_reminder(authorization: str = Header(None), 
+                           supabase = create_db_conn(),
+                           chat_id = int(os.getenv("TELEGRAM_CHAT_ID"))
+                           ):
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
         )
 
    current_hour = datetime.now().hour
-   if not (8 <= current_hour < 24):
+   if not (6 <= current_hour < 24):
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
-   youtube_message = (
-      "Get off youtube!"
-   )
+   data = {
+      "app_name": "YouTube",
+      "event_type": "open",
+      "timestamp": datetime.utcnow().isoformat()
+      }
+    
+   supabase.table("app_activity_logs").insert(data).execute()
 
-   YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
-   send_telegram_message(YOUR_CHAT_ID, youtube_message)
+   youtube_message = generate_body_double_nudge()
+
+   send_telegram_message(chat_id, youtube_message)
    
    return {"status": "success", "message": "Check executed successfully"}
 
