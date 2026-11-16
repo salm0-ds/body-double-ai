@@ -42,14 +42,21 @@ Speak like an intelligent, grounded human. Be direct, honest, empathetic and con
 NUDGE_MAX_CHARS = 120
 
 
+def _cap_length(text: str) -> str:
+  """Hard cap: trims to NUDGE_MAX_CHARS at a word boundary if the model overshoots."""
+  text = text.strip()
+  if len(text) > NUDGE_MAX_CHARS:
+    text = text[:NUDGE_MAX_CHARS - 1].rsplit(" ", 1)[0] + "…"
+  return text
+
+
 class YoutubeNudge(BaseModel):
   message: Annotated[
       str,
       Field(description=(
           f"One short sentence, max {NUDGE_MAX_CHARS} characters. "
-          "No markdown, no greeting."),
-          max_digits=NUDGE_MAX_CHARS
-      )
+          "No markdown, no greeting.")),
+      AfterValidator(_cap_length),
   ]
 
 

@@ -169,15 +169,31 @@ async def youtube_closed(authorization: str = Header(None)):
 
    current_hour = datetime.now().hour
    if not (8 <= current_hour < 24):
+      log.info("/youtube-closed skipped: server hour is %s", current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
-   youtube_message = (
-      "You closed youtube"
-   )
+   # Log to DB — a failure here shouldn't stop the Telegram message
+   data = {
+      "app_name": "YouTube",
+      "event_type": "closed",
+      "timestamp": datetime.utcnow().isoformat()
+      }
+   try:
+      supabase = await create_db_conn()
+      await supabase.table("app_activity_logs").insert(data).execute()
+      log.info("Logged YouTube close to Supabase")
+   except Exception:
+      log.exception("Supabase insert failed")
 
-   YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
-   send_telegram_message(YOUR_CHAT_ID, youtube_message)
-   
+   youtube_message = "You closed youtube"
+
+   chat_id = os.getenv("TELEGRAM_CHAT_ID")
+   if not chat_id:
+      log.error("TELEGRAM_CHAT_ID is not set")
+      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
+
+   send_telegram_message(int(chat_id), youtube_message)
+
    return {"status": "success", "message": "Check executed successfully"}
 
 @app.post("/trigger-scheduled-check")
