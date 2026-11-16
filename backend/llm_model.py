@@ -1,6 +1,8 @@
 import os
 from datetime import datetime, timezone
+from typing import Annotated
 from openai import AsyncOpenAI
+from pydantic import AfterValidator, BaseModel, Field
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
@@ -36,16 +38,31 @@ Speak like an intelligent, grounded human. Be direct, honest, empathetic and con
 
 **Above all:** Don't just give me information. Help me think better, make progress, follow through and become the person capable of achieving my ambitions. Measure success by real-world results, not conversations."""
 
+# iPhone lock-screen banners show roughly 2-3 lines (~150 chars) before cutting off
+NUDGE_MAX_CHARS = 120
+
+
+class YoutubeNudge(BaseModel):
+  message: Annotated[
+      str,
+      Field(description=(
+          f"One short sentence, max {NUDGE_MAX_CHARS} characters. "
+          "No markdown, no greeting."),
+          max_digits=NUDGE_MAX_CHARS
+      ),
+  ]
+
+
 async def generate_body_double_nudge() -> str:
-  """Calls OpenAI to generate a tailored accountability message."""
+  """Calls OpenAI to generate a short accountability message that fits a phone notification."""
 
   current_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
-  response = await openai_client.responses.create(
+  response = await openai_client.responses.parse(
       model="gpt-5-mini",
       instructions=SYSTEM_PROMPT,
-      input=(
-          f"Time is: {current_time}. Supposed to be working, youtube was opened."
-      )
+      reasoning={"effort": "minimal"},
+      input=f"Time is: {current_time}. User opened youtube",
+      text_format=YoutubeNudge,
     )
-  return response.output_text
+  return response.output_parsed.message
