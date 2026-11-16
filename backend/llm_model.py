@@ -31,7 +31,7 @@ class YoutubeNudge(BaseModel):
   ]
 
 
-async def generate_body_double_nudge() -> str:
+async def generate_body_double_nudge(app_name: str = "YouTube") -> str:
   """Calls OpenAI to generate a short accountability message that fits a phone notification."""
 
   current_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
@@ -40,7 +40,7 @@ async def generate_body_double_nudge() -> str:
       model="gpt-5-mini",
       instructions=SYSTEM_PROMPT,
       reasoning={"effort": "minimal"},
-      input=f"Time is: {current_time}. User opened youtube",
+      input=f"Time is: {current_time}. User opened {app_name}",
       text_format=YoutubeNudge,
     )
   return response.output_parsed.message

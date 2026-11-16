@@ -114,87 +114,113 @@ async def telegram_webhook(request: Request):
             
     return {"status": "ok"}
 
-@app.post("/youtube-opened")
-async def youtube_opened(authorization: str = Header(None)):
-   log.info("/youtube-opened called")
+def _check_shortcut_auth(endpoint: str, authorization: str):
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
-      log.warning("/youtube-opened rejected: bad or missing Authorization header")
+      log.warning("%s rejected: bad or missing Authorization header", endpoint)
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
         )
+
+
+async def _log_app_event(app_name: str, event_type: str):
+   """Append an open/close event to Supabase. Failures are logged, never raised."""
+   data = {
+      "app_name": app_name,
+      "event_type": event_type,
+      "timestamp": datetime.utcnow().isoformat()
+      }
+   try:
+      supabase = await create_db_conn()
+      await supabase.table("app_activity_logs").insert(data).execute()
+      log.info("Logged %s %s to Supabase", app_name, event_type)
+   except Exception:
+      log.exception("Supabase insert failed for %s %s", app_name, event_type)
+
+
+def _send_to_me(text: str):
+   chat_id = os.getenv("TELEGRAM_CHAT_ID")
+   if not chat_id:
+      log.error("TELEGRAM_CHAT_ID is not set")
+      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
+   send_telegram_message(int(chat_id), text)
+
+
+async def handle_app_opened(endpoint: str, app_name: str, authorization: str):
+   log.info("%s called", endpoint)
+   _check_shortcut_auth(endpoint, authorization)
 
    current_hour = datetime.now().hour
    if not (6 <= current_hour < 24):
-      log.info("/youtube-opened skipped: server hour is %s", current_hour)
+      log.info("%s skipped: server hour is %s", endpoint, current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
-   # Log to DB — a failure here shouldn't stop the Telegram message
-   data = {
-      "app_name": "YouTube",
-      "event_type": "opened",
-      "timestamp": datetime.utcnow().isoformat()
-      }
-   try:
-      supabase = await create_db_conn()
-      await supabase.table("app_activity_logs").insert(data).execute()
-      log.info("Logged YouTube open to Supabase")
-   except Exception:
-      log.exception("Supabase insert failed")
+   await _log_app_event(app_name, "opened")
 
    # Generate the nudge — fall back to a plain message if OpenAI fails
    try:
-      youtube_message = await generate_body_double_nudge()
+      message = await generate_body_double_nudge(app_name)
    except Exception:
-      log.exception("OpenAI nudge generation failed, using fallback")
-      youtube_message = "You opened YouTube. Is this what you should be doing right now?"
+      log.exception("OpenAI nudge generation failed for %s, using fallback", app_name)
+      message = f"You opened {app_name}. Is this what you should be doing right now?"
 
-   chat_id = os.getenv("TELEGRAM_CHAT_ID")
-   if not chat_id:
-      log.error("TELEGRAM_CHAT_ID is not set")
-      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
-
-   send_telegram_message(int(chat_id), youtube_message)
-
+   _send_to_me(message)
    return {"status": "success", "message": "Check executed successfully"}
 
 
-@app.post("/youtube-closed")
-async def youtube_closed(authorization: str = Header(None)):
-   log.info("/youtube-closed called")
-   if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
-      log.warning("/youtube-closed rejected: bad or missing Authorization header")
-      raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
-        )
+async def handle_app_closed(endpoint: str, app_name: str, authorization: str):
+   log.info("%s called", endpoint)
+   _check_shortcut_auth(endpoint, authorization)
 
    current_hour = datetime.now().hour
    if not (8 <= current_hour < 24):
-      log.info("/youtube-closed skipped: server hour is %s", current_hour)
+      log.info("%s skipped: server hour is %s", endpoint, current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
-   # Log to DB — a failure here shouldn't stop the Telegram message
-   data = {
-      "app_name": "YouTube",
-      "event_type": "closed",
-      "timestamp": datetime.utcnow().isoformat()
-      }
-   try:
-      supabase = await create_db_conn()
-      await supabase.table("app_activity_logs").insert(data).execute()
-      log.info("Logged YouTube close to Supabase")
-   except Exception:
-      log.exception("Supabase insert failed")
+   await _log_app_event(app_name, "closed")
 
-   youtube_message = "You closed youtube"
-
-   chat_id = os.getenv("TELEGRAM_CHAT_ID")
-   if not chat_id:
-      log.error("TELEGRAM_CHAT_ID is not set")
-      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
-
-   send_telegram_message(int(chat_id), youtube_message)
-
+   _send_to_me(f"You closed {app_name}")
    return {"status": "success", "message": "Check executed successfully"}
+
+
+@app.post("/youtube-opened")
+async def youtube_opened(authorization: str = Header(None)):
+   return await handle_app_opened("/youtube-opened", "YouTube", authorization)
+
+@app.post("/youtube-closed")
+async def youtube_closed(authorization: str = Header(None)):
+   return await handle_app_closed("/youtube-closed", "YouTube", authorization)
+
+@app.post("/chrome-opened")
+async def chrome_opened(authorization: str = Header(None)):
+   return await handle_app_opened("/chrome-opened", "Chrome", authorization)
+
+@app.post("/chrome-closed")
+async def chrome_closed(authorization: str = Header(None)):
+   return await handle_app_closed("/chrome-closed", "Chrome", authorization)
+
+@app.post("/ig-opened")
+async def ig_opened(authorization: str = Header(None)):
+   return await handle_app_opened("/ig-opened", "Instagram", authorization)
+
+@app.post("/ig-closed")
+async def ig_closed(authorization: str = Header(None)):
+   return await handle_app_closed("/ig-closed", "Instagram", authorization)
+
+@app.post("/snapchat-opened")
+async def snapchat_opened(authorization: str = Header(None)):
+   return await handle_app_opened("/snapchat-opened", "Snapchat", authorization)
+
+@app.post("/snapchat-closed")
+async def snapchat_closed(authorization: str = Header(None)):
+   return await handle_app_closed("/snapchat-closed", "Snapchat", authorization)
+
+@app.post("/google-opened")
+async def google_opened(authorization: str = Header(None)):
+   return await handle_app_opened("/google-opened", "Google", authorization)
+
+@app.post("/google-closed")
+async def google_closed(authorization: str = Header(None)):
+   return await handle_app_closed("/google-closed", "Google", authorization)
 
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):
