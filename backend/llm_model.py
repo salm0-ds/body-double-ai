@@ -36,8 +36,7 @@ Speak like an intelligent, grounded human. Be direct, honest, empathetic and con
 
 **Above all:** Don't just give me information. Help me think better, make progress, follow through and become the person capable of achieving my ambitions. Measure success by real-world results, not conversations."""
 
-async def generate_body_double_nudge(current_task: str, 
-                                     open_count: int) -> str:
+async def generate_body_double_nudge() -> str:
   """Calls OpenAI to generate a tailored accountability message."""
 
   current_time = datetime.now(timezone.utc).strftime("%H:%M UTC")

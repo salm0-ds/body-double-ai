@@ -1,12 +1,18 @@
 import os
-import requests
 import json
+import logging
+import requests
 from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, status, Request
-from datetime import datetime
 
 from database_conn import create_db_conn
 from llm_model import generate_body_double_nudge
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+log = logging.getLogger("telegram-agent")
 
 app = FastAPI()
 
@@ -25,7 +31,14 @@ def send_telegram_message(chat_id: int, text: str):
         "chat_id": chat_id,
         "text": text
     }
-    requests.post(url, json=payload)
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if not response.ok:
+            log.error("Telegram sendMessage failed (%s): %s", response.status_code, response.text)
+        else:
+            log.info("Telegram message sent to %s", chat_id)
+    except requests.RequestException:
+        log.exception("Telegram sendMessage request errored")
 
 def send_option_buttons(chat_id: int, question_text: str):
   """Sends a message with clickable Yes/No inline buttons."""
@@ -66,7 +79,8 @@ async def telegram_webhook(request: Request):
     Receives incoming JSON updates from Telegram whenever you send a message.
     """
     data = await request.json()
-    
+    log.info("/webhook update: %s", data)
+
     # Check if the incoming payload contains a standard message
     if "message" in data:
         message = data["message"]
@@ -101,38 +115,54 @@ async def telegram_webhook(request: Request):
     return {"status": "ok"}
 
 @app.post("/youtube-opened")
-async def youtube_reminder(authorization: str = Header(None)
-                           ):
+async def youtube_opened(authorization: str = Header(None)):
+   log.info("/youtube-opened called")
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
+      log.warning("/youtube-opened rejected: bad or missing Authorization header")
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
         )
 
    current_hour = datetime.now().hour
    if not (6 <= current_hour < 24):
+      log.info("/youtube-opened skipped: server hour is %s", current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
+   # Log to DB — a failure here shouldn't stop the Telegram message
    data = {
       "app_name": "YouTube",
       "event_type": "opened",
       "timestamp": datetime.utcnow().isoformat()
       }
-   supabase = await create_db_conn()
-   supabase.table("app_activity_logs").insert(data).execute()
+   try:
+      supabase = await create_db_conn()
+      await supabase.table("app_activity_logs").insert(data).execute()
+      log.info("Logged YouTube open to Supabase")
+   except Exception:
+      log.exception("Supabase insert failed")
 
-   youtube_message = generate_body_double_nudge()
-   youtube = "HIIII"
-   TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
+   # Generate the nudge — fall back to a plain message if OpenAI fails
+   try:
+      youtube_message = await generate_body_double_nudge()
+   except Exception:
+      log.exception("OpenAI nudge generation failed, using fallback")
+      youtube_message = "You opened YouTube. Is this what you should be doing right now?"
 
-   send_telegram_message(TELEGRAM_CHAT_ID, youtube)
-   print(youtube_message)
-   
+   chat_id = os.getenv("TELEGRAM_CHAT_ID")
+   if not chat_id:
+      log.error("TELEGRAM_CHAT_ID is not set")
+      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
+
+   send_telegram_message(int(chat_id), youtube_message)
+
    return {"status": "success", "message": "Check executed successfully"}
 
 
 @app.post("/youtube-closed")
-async def youtube_reminder(authorization: str = Header(None)):
+async def youtube_closed(authorization: str = Header(None)):
+   log.info("/youtube-closed called")
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
+      log.warning("/youtube-closed rejected: bad or missing Authorization header")
       raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized apple trigger"
         )
