@@ -49,7 +49,7 @@ class YoutubeNudge(BaseModel):
           f"One short sentence, max {NUDGE_MAX_CHARS} characters. "
           "No markdown, no greeting."),
           max_digits=NUDGE_MAX_CHARS
-      ),
+      )
   ]
 
 
