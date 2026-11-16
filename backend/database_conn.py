@@ -1,8 +1,8 @@
-from supabase import create_async_client, create_client
+from supabase import acreate_client, create_client
 import os
 
-def create_db_conn():
-    return create_client(
+async def create_db_conn():
+    return await acreate_client(
     os.environ["SUPABASE_URL"],
     os.environ["SUPABASE_PUBLISHABLE_KEY"]
     )
