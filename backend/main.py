@@ -101,8 +101,7 @@ async def telegram_webhook(request: Request):
     return {"status": "ok"}
 
 @app.post("/youtube-opened")
-async def youtube_reminder(authorization: str = Header(None), 
-                           supabase = create_db_conn()
+async def youtube_reminder(authorization: str = Header(None)
                            ):
    if authorization != f"Bearer {APPLE_SHORTCUT_SECRET}":
       raise HTTPException(
@@ -118,7 +117,7 @@ async def youtube_reminder(authorization: str = Header(None),
       "event_type": "opened",
       "timestamp": datetime.utcnow().isoformat()
       }
-    
+   supabase = await create_db_conn()
    supabase.table("app_activity_logs").insert(data).execute()
 
    youtube_message = generate_body_double_nudge()
