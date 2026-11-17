@@ -1,11 +1,13 @@
 import os
 import json
+import asyncio
 import logging
 import requests
 from datetime import datetime
 from fastapi import FastAPI, Header, HTTPException, status, Request
 
 from database_conn import create_db_conn
+from google_cal import get_today_events
 from llm_model import generate_body_double_nudge
 
 logging.basicConfig(
@@ -221,6 +223,24 @@ async def google_opened(authorization: str = Header(None)):
 @app.post("/google-closed")
 async def google_closed(authorization: str = Header(None)):
    return await handle_app_closed("/google-closed", "Google", authorization)
+
+@app.post("/daily-schedule-download")
+async def daily_schedule_download(authorization: str = Header(None)):
+   """Pull today's Google Calendar events into schedule_blocks (upsert = no duplicates)."""
+   _check_shortcut_auth("/daily-schedule-download", authorization)
+
+   # Google client is blocking, so run it off the event loop
+   rows = await asyncio.to_thread(get_today_events)
+   now = datetime.utcnow().isoformat()
+   for row in rows:
+      row["updated_at"] = now
+
+   if rows:
+      supabase = await create_db_conn()
+      await supabase.table("schedule_blocks").upsert(rows, on_conflict="google_event_id").execute()
+
+   log.info("Synced %d calendar events to schedule_blocks", len(rows))
+   return {"status": "success", "count": len(rows), "events": rows}
 
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):

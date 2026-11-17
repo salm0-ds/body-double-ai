@@ -47,47 +47,49 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
+def get_today_events():
+    """Return today's timed events as rows ready for the schedule_blocks table."""
+    service = get_calendar_service()
+
+    # Time bounds for today, in this machine's local time zone
+    today = datetime.date.today()
+    start = datetime.datetime.combine(today, datetime.time.min).astimezone().isoformat()
+    end = datetime.datetime.combine(today, datetime.time.max).astimezone().isoformat()
+
+    events_result = (
+        service.events()
+        .list(
+            calendarId="primary",
+            timeMin=start,
+            timeMax=end,
+            singleEvents=True,
+            orderBy="startTime",
+        )
+        .execute()
+    )
+
+    rows = []
+    for event in events_result.get("items", []):
+        # All-day events only have "date", not "dateTime" - skip them
+        if "dateTime" not in event["start"]:
+            continue
+        rows.append({
+            "google_event_id": event["id"],
+            "title": event.get("summary", "(no title)"),
+            "start_time": event["start"]["dateTime"],
+            "end_time": event["end"]["dateTime"],
+        })
+    return rows
+
+
 def main():
     try:
-        service = get_calendar_service()
-
-        # Get time bounds for today
-        today = datetime.date.today()
-        start = (
-            datetime.datetime.combine(today, datetime.time.min)
-            .astimezone()
-            .isoformat()
-        )
-        end = (
-            datetime.datetime.combine(today, datetime.time.max)
-            .astimezone()
-            .isoformat()
-        )
-
-        # Query calendar
-        events_result = (
-            service.events()
-            .list(
-                calendarId="primary",
-                timeMin=start,
-                timeMax=end,
-                singleEvents=True,
-                orderBy="startTime",
-            )
-            .execute()
-        )
-
-        events = events_result.get("items", [])
-
-        print(f"\n--- Schedule for {today} ---")
-        if not events:
+        rows = get_today_events()
+        print(f"\n--- Schedule for {datetime.date.today()} ---")
+        if not rows:
             print("No events scheduled for today.")
-            return
-
-        for event in events:
-            time_part = event["start"].get("dateTime", "All Day").split("T")[-1][:5]
-            print(f"[{time_part}] {event['summary']}")
-
+        for row in rows:
+            print(f"[{row['start_time'].split('T')[-1][:5]}] {row['title']}")
     except Exception as e:
         print(f"An error occurred: {e}")
 
