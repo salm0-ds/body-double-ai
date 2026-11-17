@@ -227,17 +227,28 @@ async def google_closed(authorization: str = Header(None)):
 @app.post("/daily-schedule-download")
 async def daily_schedule_download(authorization: str = Header(None)):
    """Pull today's Google Calendar events into schedule_blocks (upsert = no duplicates)."""
+   log.info("/daily-schedule-download called")
    _check_shortcut_auth("/daily-schedule-download", authorization)
 
    # Google client is blocking, so run it off the event loop
-   rows = await asyncio.to_thread(get_today_events)
+   try:
+      rows = await asyncio.to_thread(get_today_events)
+   except Exception as e:
+      log.exception("Fetching Google Calendar events failed")
+      raise HTTPException(status_code=500, detail=f"Google Calendar error: {e}")
+   log.info("Fetched %d events from Google Calendar", len(rows))
+
    now = datetime.utcnow().isoformat()
    for row in rows:
       row["updated_at"] = now
 
    if rows:
-      supabase = await create_db_conn()
-      await supabase.table("schedule_blocks").upsert(rows, on_conflict="google_event_id").execute()
+      try:
+         supabase = await create_db_conn()
+         await supabase.table("schedule_blocks").upsert(rows, on_conflict="google_event_id").execute()
+      except Exception as e:
+         log.exception("Supabase upsert into schedule_blocks failed")
+         raise HTTPException(status_code=500, detail=f"Supabase error: {e}")
 
    log.info("Synced %d calendar events to schedule_blocks", len(rows))
    return {"status": "success", "count": len(rows), "events": rows}

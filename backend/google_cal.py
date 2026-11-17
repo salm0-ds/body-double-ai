@@ -1,4 +1,6 @@
 import datetime
+import json
+import logging
 import os
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -6,17 +8,33 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+log = logging.getLogger("telegram-agent.google_cal")
 
 
 def get_calendar_service():
     creds = None
-    # Use token.json to avoid logging in in the browser every time
-    if os.path.exists("token.json"):
+    token_env = os.getenv("GOOGLE_TOKEN_JSON")
+    if token_env:
+        # On the server (Render): paste the contents of token.json into this env var
+        log.info("Loading Google credentials from GOOGLE_TOKEN_JSON")
+        creds = Credentials.from_authorized_user_info(json.loads(token_env), SCOPES)
+    elif os.path.exists("token.json"):
+        # Locally: use token.json to avoid logging in in the browser every time
+        log.info("Loading Google credentials from token.json")
         creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    else:
+        log.warning("No GOOGLE_TOKEN_JSON env var and no token.json in %s", os.getcwd())
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
+            log.info("Google token expired, refreshing")
             creds.refresh(Request())
+        elif os.getenv("RENDER"):
+            # Browser login can't work on a server - fail with a clear message instead
+            raise RuntimeError(
+                "No valid Google credentials on the server. Set GOOGLE_TOKEN_JSON "
+                "to the contents of a token.json created by logging in locally."
+            )
         else:
             # 1. Fetch credentials from environment variables
             client_id = os.getenv("GOOGLE_CLIENT_ID")
@@ -40,9 +58,10 @@ def get_calendar_service():
             flow = InstalledAppFlow.from_client_config(client_config, SCOPES)
             creds = flow.run_local_server(port=0)
 
-        # Save token for future runs
-        with open("token.json", "w") as token:
-            token.write(creds.to_json()) 
+        # Save token for future runs (only locally, the server uses the env var)
+        if not token_env:
+            with open("token.json", "w") as token:
+                token.write(creds.to_json())
 
     return build("calendar", "v3", credentials=creds)
 
