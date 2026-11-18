@@ -174,13 +174,12 @@ async def handle_app_closed(endpoint: str, app_name: str, authorization: str):
    _check_shortcut_auth(endpoint, authorization)
 
    current_hour = datetime.now().hour
-   if not (8 <= current_hour < 24):
+   if not (6 <= current_hour < 24):
       log.info("%s skipped: server hour is %s", endpoint, current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
    await _log_app_event(app_name, "closed")
 
-   _send_to_me(f"You closed {app_name}")
    return {"status": "success", "message": "Check executed successfully"}
 
 
