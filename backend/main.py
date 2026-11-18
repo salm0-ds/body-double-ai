@@ -3,10 +3,11 @@ import json
 import asyncio
 import logging
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import FastAPI, Header, HTTPException, status, Request
 
 from database_conn import create_db_conn
+from schedule_check import run_schedule_check
 from google_cal import get_today_events
 from llm_model import generate_body_double_nudge
 
@@ -129,7 +130,7 @@ async def _log_app_event(app_name: str, event_type: str):
    data = {
       "app_name": app_name,
       "event_type": event_type,
-      "timestamp": datetime.utcnow().isoformat()
+      "timestamp": datetime.now(timezone.utc).isoformat()
       }
    try:
       supabase = await create_db_conn()
@@ -265,14 +266,13 @@ async def trigger_scheduled_check(authorization: str = Header(None)):
   if not (8 <= current_hour < 24):
     return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
-  # TODO: Put your background check logic here
-  # (e.g., check emails, scan tasks, and push a message to your Telegram)
-  ai_summary_message = (
-      "🤖 this is the new one **Automated Check:** Here is your scheduled update from your backend!"
-  )
+  try:
+    supabase = await create_db_conn()
+    result = await run_schedule_check(supabase, _send_to_me)
+  except HTTPException:
+    raise
+  except Exception as e:
+    log.exception("Scheduled check failed")
+    raise HTTPException(status_code=500, detail=f"Scheduled check error: {e}")
 
-  # 3. Push the message straight to your personal Telegram chat ID
-  YOUR_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID"))
-  send_telegram_message(YOUR_CHAT_ID, ai_summary_message)
-
-  return {"status": "success", "message": "Check executed successfully"}
+  return {"status": "success", **result}
