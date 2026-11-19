@@ -9,12 +9,12 @@ log = logging.getLogger("telegram-agent.schedule_check")
 
 # Thresholds (minutes on an app)
 FREE_TIME_GRACE_MIN = 5      # no block: ignore short sessions
-FREE_TIME_LOCK_MIN = 30      # no block: lock after this long
-BLOCK_LOCK_MIN = 5           # during a block: lock after this long
+FREE_TIME_LOCK_MIN = 15      # no block: lock after this long
+BLOCK_LOCK_MIN = 2           # during a block: lock after this long
 
 # An "opened" row older than this with no "closed" is treated as a missed close event,
 # so one dropped Shortcut doesn't leave an app "open" forever.
-STALE_OPEN_HOURS = 3
+STALE_OPEN_HOURS = 2
 
 
 def _parse_ts(value: str) -> datetime:
