@@ -7,7 +7,8 @@ from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# Read + write events (needed to insert planned blocks). Changing this means re-creating token.json.
+SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 log = logging.getLogger("telegram-agent.google_cal")
 
 
@@ -66,21 +67,24 @@ def get_calendar_service():
     return build("calendar", "v3", credentials=creds)
 
 
-def get_today_events():
-    """Return today's timed events as rows ready for the schedule_blocks table."""
-    service = get_calendar_service()
+def day_bounds(day: datetime.date):
+    """Start/end of a day in this machine's local time zone, as aware datetimes."""
+    start = datetime.datetime.combine(day, datetime.time.min).astimezone()
+    end = datetime.datetime.combine(day, datetime.time.max).astimezone()
+    return start, end
 
-    # Time bounds for today, in this machine's local time zone
-    today = datetime.date.today()
-    start = datetime.datetime.combine(today, datetime.time.min).astimezone().isoformat()
-    end = datetime.datetime.combine(today, datetime.time.max).astimezone().isoformat()
+
+def get_events_for_date(day: datetime.date):
+    """Return a day's timed events as rows ready for the schedule_blocks table."""
+    service = get_calendar_service()
+    start, end = day_bounds(day)
 
     events_result = (
         service.events()
         .list(
             calendarId="primary",
-            timeMin=start,
-            timeMax=end,
+            timeMin=start.isoformat(),
+            timeMax=end.isoformat(),
             singleEvents=True,
             orderBy="startTime",
         )
@@ -97,6 +101,40 @@ def get_today_events():
             "title": event.get("summary", "(no title)"),
             "start_time": event["start"]["dateTime"],
             "end_time": event["end"]["dateTime"],
+        })
+    return rows
+
+
+def get_today_events():
+    return get_events_for_date(datetime.date.today())
+
+
+def insert_events(events: list[dict]):
+    """
+    Insert events one by one (Google has no bulk insert for events).
+    Each dict needs title, start_time, end_time (ISO strings) and optional description.
+    Returns schedule_blocks rows for the events that were created; failures are logged and skipped.
+    """
+    service = get_calendar_service()
+    rows = []
+    for ev in events:
+        body = {
+            "summary": ev["title"],
+            "description": ev.get("description") or "",
+            "start": {"dateTime": ev["start_time"]},
+            "end": {"dateTime": ev["end_time"]},
+        }
+        try:
+            created = service.events().insert(calendarId="primary", body=body).execute()
+        except Exception:
+            log.exception("Google Calendar insert failed for %r", ev["title"])
+            continue
+        log.info("Created Google event %s: %s", created["id"], ev["title"])
+        rows.append({
+            "google_event_id": created["id"],
+            "title": ev["title"],
+            "start_time": ev["start_time"],
+            "end_time": ev["end_time"],
         })
     return rows
 

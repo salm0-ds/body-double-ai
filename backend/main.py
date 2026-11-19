@@ -1,14 +1,15 @@
 import os
 import json
-import asyncio
 import logging
 import requests
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from fastapi import FastAPI, Header, HTTPException, status, Request
 
 from database_conn import create_db_conn
 from schedule_check import run_schedule_check
-from google_cal import get_today_events
+from agent import handle_chat_message
+from calendar_sync import sync_day_from_google
+from planner import run_nightly_plan
 from llm_model import generate_body_double_nudge
 
 logging.basicConfig(
@@ -80,41 +81,35 @@ def get_notion_info():
 async def telegram_webhook(request: Request):
     """
     Receives incoming JSON updates from Telegram whenever you send a message.
+    Always returns 200 so Telegram doesn't keep retrying the same update.
     """
     data = await request.json()
     log.info("/webhook update: %s", data)
 
-    # Check if the incoming payload contains a standard message
-    if "message" in data:
-        message = data["message"]
-        chat_id = message["chat"]["id"]
-        
-        # Extract user text (if it's a text message)
-        user_text = message.get("text", "")
-        
-        if user_text:
-            # TODO: Plug your custom AI engine / function-calling logic here!
-            # Example response echoing back:
-            ai_response = f"Custom AI Backend received: '{user_text}'"
-            
-            # Send the response back to your phone via Telegram API
-            send_telegram_message(chat_id, ai_response)
+    message = data.get("message")
+    if not message or not message.get("text"):
+        return {"status": "ok"}
 
-        if user_text.lower() == "check in":
-            send_option_buttons(chat_id, "Have you completed your current task?")
-        if user_text.lower() == "notion":
-           output = get_notion_info()
-           send_option_buttons(chat_id, output)
-        else:
-        # General AI reply for other messages
-            requests.post(
-               f"{TELEGRAM_API_URL}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": f"I heard you say: '{user_text}'. Processing...",
-                },
-            )
-            
+    chat_id = message["chat"]["id"]
+    user_text = message["text"]
+
+    # Only talk to you - otherwise anyone who finds the bot could spend OpenAI credits / touch your calendar
+    if str(chat_id) != os.getenv("TELEGRAM_CHAT_ID"):
+        log.warning("/webhook ignored message from unknown chat %s", chat_id)
+        return {"status": "ok"}
+
+    if user_text.lower() == "check in":
+        send_option_buttons(chat_id, "Have you completed your current task?")
+    elif user_text.lower() == "notion":
+        send_option_buttons(chat_id, get_notion_info())
+    else:
+        try:
+            reply = await handle_chat_message(user_text)
+        except Exception:
+            log.exception("Chat agent failed")
+            reply = "Sorry, something went wrong on my side. Check the logs."
+        send_telegram_message(chat_id, reply or "Done.")
+
     return {"status": "ok"}
 
 def _check_shortcut_auth(endpoint: str, authorization: str):
@@ -226,32 +221,34 @@ async def google_closed(authorization: str = Header(None)):
 
 @app.post("/daily-schedule-download")
 async def daily_schedule_download(authorization: str = Header(None)):
-   """Pull today's Google Calendar events into schedule_blocks (upsert = no duplicates)."""
+   """Make today's schedule_blocks match Google Calendar (adds, edits and removes)."""
    log.info("/daily-schedule-download called")
    _check_shortcut_auth("/daily-schedule-download", authorization)
-
-   # Google client is blocking, so run it off the event loop
    try:
-      rows = await asyncio.to_thread(get_today_events)
+      result = await sync_day_from_google(date.today())
    except Exception as e:
-      log.exception("Fetching Google Calendar events failed")
-      raise HTTPException(status_code=500, detail=f"Google Calendar error: {e}")
-   log.info("Fetched %d events from Google Calendar", len(rows))
+      log.exception("Calendar sync failed")
+      raise HTTPException(status_code=500, detail=f"Calendar sync error: {e}")
+   return {"status": "success", "count": result["upserted"], **result}
 
-   now = datetime.utcnow().isoformat()
-   for row in rows:
-      row["updated_at"] = now
 
-   if rows:
+@app.post("/nightly-plan")
+async def nightly_plan(authorization: str = Header(None)):
+   """Run at ~10pm: fill tomorrow's calendar from Todoist if it has under 7h scheduled."""
+   log.info("/nightly-plan called")
+   if authorization != f"Bearer {CRON_SECRET}":
+      raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized cron trigger")
+   try:
+      return await run_nightly_plan(_send_to_me)
+   except HTTPException:
+      raise
+   except Exception as e:
+      log.exception("Nightly plan failed")
       try:
-         supabase = await create_db_conn()
-         await supabase.table("schedule_blocks").upsert(rows, on_conflict="google_event_id").execute()
-      except Exception as e:
-         log.exception("Supabase upsert into schedule_blocks failed")
-         raise HTTPException(status_code=500, detail=f"Supabase error: {e}")
-
-   log.info("Synced %d calendar events to schedule_blocks", len(rows))
-   return {"status": "success", "count": len(rows), "events": rows}
+         _send_to_me("⚠️ Nightly planning failed. Check the logs.")
+      except Exception:
+         pass
+      raise HTTPException(status_code=500, detail=f"Nightly plan error: {e}")
 
 @app.post("/trigger-scheduled-check")
 async def trigger_scheduled_check(authorization: str = Header(None)):
