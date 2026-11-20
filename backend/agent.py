@@ -1,10 +1,10 @@
 """Telegram chat agent: OpenAI decides whether to call tools (e.g. sync Google Calendar -> Supabase)."""
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
-from calendar_sync import sync_day_from_google
+from calendar_sync import get_blocks_for_date, sync_day_from_google
 from llm_model import openai_client
 from todoist_input import fetch_tasks
 
@@ -16,6 +16,7 @@ AGENT_PROMPT = (
     "sync_google_calendar for the day they mean (default 'today'), then confirm briefly. "
     "If the user asks for help with, sorting or prioritising their tasks, call get_todoist_tasks "
     "and work from that list (it is their p1 tasks only). "
+    "If they ask what's on their schedule, what to do next, or when to fit tasks in, call get_schedule. "
     "Otherwise just reply in one or two short sentences. "
     "Earlier messages are included for context; their [HH:MM UTC] prefixes are timestamps, never write them yourself."
 )
@@ -40,6 +41,19 @@ TOOLS = [{
     "description": "Get the user's current top-priority (p1) Todoist tasks, with due dates and durations.",
     "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
     "strict": True,
+}, {
+    "type": "function",
+    "name": "get_schedule",
+    "description": "Get the user's schedule blocks (title, start and end time) for a day, plus the current time.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "day": {"type": "string", "enum": ["today", "tomorrow"]},
+        },
+        "required": ["day"],
+        "additionalProperties": False,
+    },
+    "strict": True,
 }]
 
 
@@ -53,6 +67,13 @@ async def _run_tool(name: str, arguments: str) -> dict:
       return result
     if name == "get_todoist_tasks":
       return {"tasks": await fetch_tasks()}
+    if name == "get_schedule":
+      day = date.today() + timedelta(days=1 if args["day"] == "tomorrow" else 0)
+      blocks = await get_blocks_for_date(day)
+      return {
+          "now": datetime.now(timezone.utc).isoformat(),
+          "blocks": [{k: b[k] for k in ("title", "start_time", "end_time")} for b in blocks],
+      }
     return {"error": f"Unknown tool {name}"}
   except Exception as e:
     log.exception("Tool %s failed", name)
