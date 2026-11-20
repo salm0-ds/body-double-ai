@@ -6,7 +6,7 @@ from typing import Optional
 from supabase import AsyncClient
 
 from messaging import notify_me
-from twilio_actions import LOCK_PHONE, OPEN_NOTION_INSPO, START_OPAL, send_command
+from twilio_actions import MAJOR_BLOCK, OPEN_NOTION_INSPO, send_command
 
 log = logging.getLogger("telegram-agent.schedule_check")
 
@@ -144,13 +144,12 @@ async def run_schedule_check(db: AsyncClient) -> dict:
       await record("sent_nudge", 1, f"{name} opened during \"{title}\"", msg_id)
 
     else:
-      # Same lock whether or not a block is running: Telegram first (before the phone locks), then Opal, then lock
+      # Over the limit (block or not): Telegram first, then one "majorblock" SMS for the phone to act on
       action = "lock"
       reason = f"{m} min on {name} during \"{title}\"" if block else f"{m} min on {name}, nothing scheduled"
       msg_id = await tell(f"🔒 Lock time: {reason}. Close {name} now.", "lock_alert")
-      for command, action_taken in ((START_OPAL, "started_opal"), (LOCK_PHONE, "locked_phone")):
-        sid = await send_command(command)
-        await record(action_taken, 3, reason, msg_id, _twilio_meta(command, sid))
+      sid = await send_command(MAJOR_BLOCK)
+      await record("major_block", 3, reason, msg_id, _twilio_meta(MAJOR_BLOCK, sid))
 
     log.info("Schedule check: %s open %.1f min, block=%s -> %s", name, mins, title, action)
     actions.append({"app_name": name, "minutes_open": round(mins, 1), "action": action})

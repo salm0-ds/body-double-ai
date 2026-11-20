@@ -1,4 +1,4 @@
-"""Send command SMS via Twilio to the phone, which runs the matching automation (Opal, lock phone, Notion)."""
+"""Send command SMS via Twilio to the phone, which runs the matching automation (major block, Notion)."""
 import asyncio
 import logging
 import os
@@ -9,9 +9,8 @@ from twilio.rest import Client
 log = logging.getLogger("telegram-agent.twilio")
 
 OPEN_NOTION_INSPO = "open-notion-inspo"
-START_OPAL = "start-opal"
-# The phone's Shortcut for this text now locks the phone (the command text itself is unchanged)
-LOCK_PHONE = "disconnect-network"
+# Sent when time on an app goes over the limit; the phone's Shortcut for this text does the blocking
+MAJOR_BLOCK = "majorblock"
 
 
 def _send_sms(body: str) -> str:
