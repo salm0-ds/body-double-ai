@@ -2,6 +2,7 @@
 import json
 import logging
 from datetime import date, timedelta
+from typing import Optional
 
 from calendar_sync import sync_day_from_google
 from llm_model import openai_client
@@ -12,7 +13,8 @@ AGENT_PROMPT = (
     "You are a concise accountability assistant chatting over Telegram. "
     "If the user says they changed, updated or edited their Google Calendar, call "
     "sync_google_calendar for the day they mean (default 'today'), then confirm briefly. "
-    "Otherwise just reply in one or two short sentences."
+    "Otherwise just reply in one or two short sentences. "
+    "Earlier messages are included for context; their [HH:MM UTC] prefixes are timestamps, never write them yourself."
 )
 
 TOOLS = [{
@@ -46,12 +48,15 @@ async def _run_tool(name: str, arguments: str) -> dict:
     return {"error": str(e)}
 
 
-async def handle_chat_message(text: str) -> str:
-  """Run one user message through the LLM, executing any tool calls. Returns the reply text."""
+async def handle_chat_message(text: str, history: Optional[list[dict]] = None) -> str:
+  """
+  Run one user message through the LLM, executing any tool calls. Returns the reply text.
+  `history` is recent messages (oldest first) from messaging.get_recent_messages, not including `text`.
+  """
   response = await openai_client.responses.create(
       model="gpt-5-mini",
       instructions=AGENT_PROMPT,
-      input=text,
+      input=(history or []) + [{"role": "user", "content": text}],
       tools=TOOLS,
   )
 

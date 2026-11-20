@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Optional
 from openai import AsyncOpenAI
 from pydantic import AfterValidator, BaseModel, Field
 
@@ -31,8 +31,11 @@ class YoutubeNudge(BaseModel):
   ]
 
 
-async def generate_body_double_nudge(app_name: str = "YouTube") -> str:
-  """Calls OpenAI to generate a short accountability message that fits a phone notification."""
+async def generate_body_double_nudge(app_name: str = "YouTube", history: Optional[list[dict]] = None) -> str:
+  """
+  Calls OpenAI to generate a short accountability message that fits a phone notification.
+  `history` is recent chat messages (oldest first) so the nudge can build on the conversation.
+  """
 
   current_time = datetime.now(timezone.utc).strftime("%H:%M UTC")
 
@@ -40,7 +43,11 @@ async def generate_body_double_nudge(app_name: str = "YouTube") -> str:
       model="gpt-5-mini",
       instructions=SYSTEM_PROMPT,
       reasoning={"effort": "minimal"},
-      input=f"Time is: {current_time}. User opened {app_name}",
+      input=(history or []) + [{
+          "role": "developer",
+          "content": f"Time is: {current_time}. User just opened {app_name}. Write the nudge. "
+                     "Earlier messages are context only; never include their [HH:MM UTC] prefixes.",
+      }],
       text_format=YoutubeNudge,
     )
   return response.output_parsed.message

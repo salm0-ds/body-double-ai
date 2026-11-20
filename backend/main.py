@@ -1,5 +1,4 @@
 import os
-import json
 import logging
 import requests
 from datetime import date, datetime, timezone
@@ -11,6 +10,7 @@ from agent import handle_chat_message
 from calendar_sync import sync_day_from_google
 from planner import run_nightly_plan
 from llm_model import generate_body_double_nudge
+from messaging import get_recent_messages, notify_me, save_message
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,50 +20,18 @@ log = logging.getLogger("telegram-agent")
 
 app = FastAPI()
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 APPLE_SHORTCUT_SECRET = os.getenv("APPLE_SHORTCUT_SECRET")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 NOTION_API_KEY = os.getenv("NOTION_API_KEY")
 CRON_SECRET = os.getenv("CRON_SECRET", "some-secret-token")
 
 
 
-def send_telegram_message(chat_id: int, text: str):
-    """Sends a text response back to the user on Telegram."""
-    url = f"{TELEGRAM_API_URL}/sendMessage"
-    payload = {
-        "chat_id": chat_id,
-        "text": text
-    }
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        if not response.ok:
-            log.error("Telegram sendMessage failed (%s): %s", response.status_code, response.text)
-        else:
-            log.info("Telegram message sent to %s", chat_id)
-    except requests.RequestException:
-        log.exception("Telegram sendMessage request errored")
-
-def send_option_buttons(chat_id: int, question_text: str):
-  """Sends a message with clickable Yes/No inline buttons."""
-  url = f"{TELEGRAM_API_URL}/sendMessage"
-
-  # Define the inline keyboard layout (1 row with two buttons)
-  inline_keyboard = {
-      "inline_keyboard": [[
-          {"text": "✅ Yes", "callback_data": "answer_yes"},
-          {"text": "❌ No", "callback_data": "answer_no"},
-      ]]
-  }
-
-  payload = {
-      "chat_id": chat_id,
-      "text": question_text,
-      "reply_markup": json.dumps(inline_keyboard),
-  }
-
-  response = requests.post(url, json=payload)
-  return response.json()
+CHECK_IN_BUTTONS = {
+    "inline_keyboard": [[
+        {"text": "✅ Yes", "callback_data": "answer_yes"},
+        {"text": "❌ No", "callback_data": "answer_no"},
+    ]]
+}
 
 def get_notion_info():
    home_page_id = "35122950-dc11-8046-b89f-d4c0370816db"
@@ -98,17 +66,26 @@ async def telegram_webhook(request: Request):
         log.warning("/webhook ignored message from unknown chat %s", chat_id)
         return {"status": "ok"}
 
+    # Load history BEFORE saving this message, so it isn't sent to the AI twice
+    history = await get_recent_messages()
+    await save_message("user", user_text, metadata={"telegram_message_id": message.get("message_id")})
+
     if user_text.lower() == "check in":
-        send_option_buttons(chat_id, "Have you completed your current task?")
+        await notify_me("Have you completed your current task?", "check_in", reply_markup=CHECK_IN_BUTTONS)
     elif user_text.lower() == "notion":
-        send_option_buttons(chat_id, get_notion_info())
+        try:
+            notion_text = get_notion_info()
+        except Exception:
+            log.exception("Fetching Notion page failed")
+            notion_text = "Couldn't load the Notion page. Check the logs."
+        await notify_me(notion_text, "chat")
     else:
         try:
-            reply = await handle_chat_message(user_text)
+            reply = await handle_chat_message(user_text, history)
         except Exception:
             log.exception("Chat agent failed")
             reply = "Sorry, something went wrong on my side. Check the logs."
-        send_telegram_message(chat_id, reply or "Done.")
+        await notify_me(reply or "Done.", "chat")
 
     return {"status": "ok"}
 
@@ -135,14 +112,6 @@ async def _log_app_event(app_name: str, event_type: str):
       log.exception("Supabase insert failed for %s %s", app_name, event_type)
 
 
-def _send_to_me(text: str):
-   chat_id = os.getenv("TELEGRAM_CHAT_ID")
-   if not chat_id:
-      log.error("TELEGRAM_CHAT_ID is not set")
-      raise HTTPException(status_code=500, detail="TELEGRAM_CHAT_ID not set")
-   send_telegram_message(int(chat_id), text)
-
-
 async def handle_app_opened(endpoint: str, app_name: str, authorization: str):
    log.info("%s called", endpoint)
    _check_shortcut_auth(endpoint, authorization)
@@ -156,12 +125,12 @@ async def handle_app_opened(endpoint: str, app_name: str, authorization: str):
 
    # Generate the nudge — fall back to a plain message if OpenAI fails
    try:
-      message = await generate_body_double_nudge(app_name)
+      message = await generate_body_double_nudge(app_name, await get_recent_messages())
    except Exception:
       log.exception("OpenAI nudge generation failed for %s, using fallback", app_name)
       message = f"You opened {app_name}. Is this what you should be doing right now?"
 
-   _send_to_me(message)
+   await notify_me(message, "nudge", related_app=app_name)
    return {"status": "success", "message": "Check executed successfully"}
 
 
@@ -239,15 +208,10 @@ async def nightly_plan(authorization: str = Header(None)):
    if authorization != f"Bearer {CRON_SECRET}":
       raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized cron trigger")
    try:
-      return await run_nightly_plan(_send_to_me)
-   except HTTPException:
-      raise
+      return await run_nightly_plan()
    except Exception as e:
       log.exception("Nightly plan failed")
-      try:
-         _send_to_me("⚠️ Nightly planning failed. Check the logs.")
-      except Exception:
-         pass
+      await notify_me("⚠️ Nightly planning failed. Check the logs.", "plan")
       raise HTTPException(status_code=500, detail=f"Nightly plan error: {e}")
 
 @app.post("/trigger-scheduled-check")
@@ -265,9 +229,7 @@ async def trigger_scheduled_check(authorization: str = Header(None)):
 
   try:
     supabase = await create_db_conn()
-    result = await run_schedule_check(supabase, _send_to_me)
-  except HTTPException:
-    raise
+    result = await run_schedule_check(supabase)
   except Exception as e:
     log.exception("Scheduled check failed")
     raise HTTPException(status_code=500, detail=f"Scheduled check error: {e}")
