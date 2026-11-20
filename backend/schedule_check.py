@@ -14,6 +14,7 @@ log = logging.getLogger("telegram-agent.schedule_check")
 FREE_TIME_GRACE_MIN = 5      # no block: ignore short sessions
 FREE_TIME_LOCK_MIN = 15      # no block: lock after this long
 BLOCK_LOCK_MIN = 2           # during a block: lock after this long
+MAJOR_BLOCK_RESEND_MIN = 10  # app still open this long after majorblock: resend it once
 
 # An "opened" row older than this with no "closed" is treated as a missed close event,
 # so one dropped Shortcut doesn't leave an app "open" forever.
@@ -104,6 +105,27 @@ async def log_action(db: AsyncClient, *, triggered_at: datetime, action_taken: s
     log.exception("Logging %s to assistant_actions failed", action_taken)
 
 
+async def get_actions_this_session(db: AsyncClient, app: dict) -> list[dict]:
+  """
+  Actions already taken for this app since it was opened, oldest first.
+  This is the check's memory: each action fires once per app session, and closing
+  and reopening the app starts a new session. On a query failure returns [] (acts rather than stays silent).
+  """
+  try:
+    response = (
+        await db.table("assistant_actions")
+        .select("action_taken, triggered_at")
+        .eq("related_app", app["app_name"])
+        .gte("triggered_at", app["opened_at"].isoformat())
+        .order("triggered_at")
+        .execute()
+    )
+    return response.data or []
+  except Exception:
+    log.exception("Loading past actions for %s failed", app["app_name"])
+    return []
+
+
 def _twilio_meta(command: str, sid: Optional[str]) -> dict:
   return {"twilio_command": command, "twilio_sid": sid, "twilio_ok": sid is not None}
 
@@ -130,26 +152,55 @@ async def run_schedule_check(db: AsyncClient) -> dict:
 
     if block is None and mins < FREE_TIME_GRACE_MIN:
       action = "none"
+      log.info("Schedule check: %s open %.1f min, block=%s -> %s", name, mins, title, action)
+      actions.append({"app_name": name, "minutes_open": round(mins, 1), "action": action})
+      continue
 
-    elif block is None and mins < FREE_TIME_LOCK_MIN:
-      action = "nudge_and_notion"
-      reason = f"{m} min on {name}, nothing scheduled"
-      msg_id = await tell(f"You've been on {name} for {m} min. Nothing's scheduled, but don't let it drag on.", "nudge")
-      sid = await send_command(OPEN_NOTION_INSPO)
-      await record("sent_nudge_open_notion", 2, reason, msg_id, _twilio_meta(OPEN_NOTION_INSPO, sid))
+    # Memory: what has already been done for this app since it was opened
+    past = await get_actions_this_session(db, app)
+    done = {row["action_taken"] for row in past}
+
+    if block is None and mins < FREE_TIME_LOCK_MIN:
+      if "sent_nudge_open_notion" in done:
+        action = "skip_already_nudged"
+      else:
+        action = "nudge_and_notion"
+        reason = f"{m} min on {name}, nothing scheduled"
+        msg_id = await tell(f"You've been on {name} for {m} min. Nothing's scheduled, but don't let it drag on.", "nudge")
+        sid = await send_command(OPEN_NOTION_INSPO)
+        await record("sent_nudge_open_notion", 2, reason, msg_id, _twilio_meta(OPEN_NOTION_INSPO, sid))
 
     elif block is not None and mins < BLOCK_LOCK_MIN:
-      action = "nudge"
-      msg_id = await tell(f"You're meant to be on \"{title}\" right now. Close {name} and get back to it.", "nudge")
-      await record("sent_nudge", 1, f"{name} opened during \"{title}\"", msg_id)
+      if "sent_nudge" in done:
+        action = "skip_already_nudged"
+      else:
+        action = "nudge"
+        msg_id = await tell(f"You're meant to be on \"{title}\" right now. Close {name} and get back to it.", "nudge")
+        await record("sent_nudge", 1, f"{name} opened during \"{title}\"", msg_id)
 
     else:
-      # Over the limit (block or not): Telegram first, then one "majorblock" SMS for the phone to act on
-      action = "lock"
+      # Over the limit (block or not): Telegram first, then one "majorblock" SMS for the phone to act on.
+      # Sent once per session, plus one resend if the app is still open MAJOR_BLOCK_RESEND_MIN later.
       reason = f"{m} min on {name} during \"{title}\"" if block else f"{m} min on {name}, nothing scheduled"
-      msg_id = await tell(f"🔒 Lock time: {reason}. Close {name} now.", "lock_alert")
-      sid = await send_command(MAJOR_BLOCK)
-      await record("major_block", 3, reason, msg_id, _twilio_meta(MAJOR_BLOCK, sid))
+      first_block = next((row for row in past if row["action_taken"] == "major_block"), None)
+
+      if first_block is None:
+        action = "lock"
+        msg_id = await tell(f"🔒 Lock time: {reason}. Close {name} now.", "lock_alert")
+        sid = await send_command(MAJOR_BLOCK)
+        await record("major_block", 3, reason, msg_id, _twilio_meta(MAJOR_BLOCK, sid))
+
+      elif "major_block_resend" in done:
+        action = "skip_already_resent"
+
+      elif (triggered_at - _parse_ts(first_block["triggered_at"])) >= timedelta(minutes=MAJOR_BLOCK_RESEND_MIN):
+        action = "lock_resend"
+        msg_id = await tell(f"🔒 Still on {name} ({m} min) after the block. Sending it again. Close {name} now.", "lock_alert")
+        sid = await send_command(MAJOR_BLOCK)
+        await record("major_block_resend", 3, reason, msg_id, _twilio_meta(MAJOR_BLOCK, sid))
+
+      else:
+        action = "skip_already_locked"
 
     log.info("Schedule check: %s open %.1f min, block=%s -> %s", name, mins, title, action)
     actions.append({"app_name": name, "minutes_open": round(mins, 1), "action": action})
