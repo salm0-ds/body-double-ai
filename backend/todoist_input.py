@@ -7,7 +7,7 @@ log = logging.getLogger("telegram-agent.todoist")
 
 
 async def fetch_tasks() -> list[dict]:
-  """Return all active Todoist tasks as plain dicts. Returns [] (and logs) on failure."""
+  """Return active priority-4 (p1) Todoist tasks as plain dicts. Returns [] (and logs) on failure."""
   token = os.getenv("TODOIST_API_TOKEN")
   if not token:
     log.error("TODOIST_API_TOKEN is not set, planning without Todoist tasks")
@@ -16,7 +16,8 @@ async def fetch_tasks() -> list[dict]:
   tasks = []
   try:
     async with TodoistAPIAsync(token) as api:
-      pages = await api.get_tasks()  # coroutine that returns an async iterator of pages
+      # Todoist filter "p1" = the red/top priority, which the API calls priority 4
+      pages = await api.filter_tasks(query="p1")  # coroutine that returns an async iterator of pages
       async for page in pages:
         for t in page:
           tasks.append({
@@ -30,5 +31,5 @@ async def fetch_tasks() -> list[dict]:
     log.exception("Fetching Todoist tasks failed, planning without them")
     return []
 
-  log.info("Fetched %d Todoist tasks", len(tasks))
+  log.info("Fetched %d priority-4 Todoist tasks", len(tasks))
   return tasks
