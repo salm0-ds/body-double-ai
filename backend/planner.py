@@ -3,13 +3,14 @@ import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta
-from typing import Callable, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field
 
 from calendar_sync import get_blocks_for_date, save_blocks, scheduled_hours
 from google_cal import day_bounds, insert_events
 from llm_model import openai_client
+from messaging import notify_me
 from todoist_input import fetch_tasks
 
 log = logging.getLogger("telegram-agent.planner")
@@ -67,7 +68,7 @@ def _valid_new_events(plan: DailySchedulePlan, tomorrow: date, existing: list[di
   return good
 
 
-async def run_nightly_plan(send: Callable[[str], None]) -> dict:
+async def run_nightly_plan() -> dict:
   today = date.today()
   tomorrow = today + timedelta(days=1)
 
@@ -76,7 +77,7 @@ async def run_nightly_plan(send: Callable[[str], None]) -> dict:
   log.info("Tomorrow (%s) has %d blocks, %.1f hours", tomorrow, len(tomorrow_blocks), hours)
 
   if hours >= FULL_DAY_HOURS:
-    send(f"Tomorrow already has {hours:.1f}h scheduled across {len(tomorrow_blocks)} blocks. Leaving it as is.")
+    await notify_me(f"Tomorrow already has {hours:.1f}h scheduled across {len(tomorrow_blocks)} blocks. Leaving it as is.", "plan")
     return {"status": "skipped", "reason": "already full", "hours": round(hours, 1)}
 
   # Empty -> use today's calendar as context. Partly filled -> use tomorrow's existing blocks.
@@ -106,13 +107,13 @@ async def run_nightly_plan(send: Callable[[str], None]) -> dict:
     plan = response.output_parsed
   except Exception:
     log.exception("Planner LLM call failed")
-    send("⚠️ Couldn't plan tomorrow: the AI planner failed. Check the logs.")
+    await notify_me("⚠️ Couldn't plan tomorrow: the AI planner failed. Check the logs.", "plan")
     return {"status": "error", "reason": "llm failed"}
 
   events = _valid_new_events(plan, tomorrow, tomorrow_blocks)
   log.info("LLM proposed %d events, %d valid", len(plan.events), len(events))
   if not events:
-    send("Planner ran but had nothing valid to add for tomorrow.")
+    await notify_me("Planner ran but had nothing valid to add for tomorrow.", "plan")
     return {"status": "success", "added": 0}
 
   # Google first (one-by-one), so each Supabase row carries its google_event_id.
@@ -121,7 +122,7 @@ async def run_nightly_plan(send: Callable[[str], None]) -> dict:
     await save_blocks(rows)
   except Exception:
     log.exception("Saving planned blocks to Supabase failed (they ARE in Google Calendar)")
-    send("⚠️ Added blocks to Google Calendar but saving to Supabase failed. Message me to resync tomorrow.")
+    await notify_me("⚠️ Added blocks to Google Calendar but saving to Supabase failed. Message me to resync tomorrow.", "plan")
     return {"status": "error", "reason": "supabase failed", "added_to_google": len(rows)}
 
   lines = "\n".join(
@@ -130,5 +131,5 @@ async def run_nightly_plan(send: Callable[[str], None]) -> dict:
   )
   failed = len(events) - len(rows)
   note = f"\n({failed} block(s) failed to add, see logs)" if failed else ""
-  send(f"📅 Added {len(rows)} blocks for tomorrow:\n{lines}{note}")
+  await notify_me(f"📅 Added {len(rows)} blocks for tomorrow:\n{lines}{note}", "plan")
   return {"status": "success", "added": len(rows), "failed": failed}
