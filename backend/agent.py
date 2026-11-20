@@ -6,6 +6,7 @@ from typing import Optional
 
 from calendar_sync import sync_day_from_google
 from llm_model import openai_client
+from todoist_input import fetch_tasks
 
 log = logging.getLogger("telegram-agent.agent")
 
@@ -13,6 +14,8 @@ AGENT_PROMPT = (
     "You are a concise accountability assistant chatting over Telegram. "
     "If the user says they changed, updated or edited their Google Calendar, call "
     "sync_google_calendar for the day they mean (default 'today'), then confirm briefly. "
+    "If the user asks for help with, sorting or prioritising their tasks, call get_todoist_tasks "
+    "and work from that list (it is their p1 tasks only). "
     "Otherwise just reply in one or two short sentences. "
     "Earlier messages are included for context; their [HH:MM UTC] prefixes are timestamps, never write them yourself."
 )
@@ -31,6 +34,12 @@ TOOLS = [{
         "additionalProperties": False,
     },
     "strict": True,
+}, {
+    "type": "function",
+    "name": "get_todoist_tasks",
+    "description": "Get the user's current top-priority (p1) Todoist tasks, with due dates and durations.",
+    "parameters": {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+    "strict": True,
 }]
 
 
@@ -42,6 +51,8 @@ async def _run_tool(name: str, arguments: str) -> dict:
       result = await sync_day_from_google(day)
       result.pop("events", None)  # the LLM only needs the counts
       return result
+    if name == "get_todoist_tasks":
+      return {"tasks": await fetch_tasks()}
     return {"error": f"Unknown tool {name}"}
   except Exception as e:
     log.exception("Tool %s failed", name)
