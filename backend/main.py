@@ -9,7 +9,6 @@ from schedule_check import run_schedule_check
 from agent import handle_chat_message
 from calendar_sync import sync_day_from_google
 from planner import run_nightly_plan
-from llm_model import generate_body_double_nudge
 from messaging import get_recent_messages, notify_me, save_message
 
 logging.basicConfig(
@@ -121,16 +120,9 @@ async def handle_app_opened(endpoint: str, app_name: str, authorization: str):
       log.info("%s skipped: server hour is %s", endpoint, current_hour)
       return {"status": "skipped", "reason": "Outside active 12-hour window"}
 
+   # Log only - no message here. The scheduled check decides whether to nudge or block.
    await _log_app_event(app_name, "opened")
 
-   # Generate the nudge — fall back to a plain message if OpenAI fails
-   try:
-      message = await generate_body_double_nudge(app_name, await get_recent_messages())
-   except Exception:
-      log.exception("OpenAI nudge generation failed for %s, using fallback", app_name)
-      message = f"You opened {app_name}. Is this what you should be doing right now?"
-
-   await notify_me(message, "nudge", related_app=app_name)
    return {"status": "success", "message": "Check executed successfully"}
 
 
