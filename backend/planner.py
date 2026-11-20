@@ -33,12 +33,13 @@ Rules:
 - Only output NEW blocks for tomorrow ({tomorrow}). Never repeat or overlap the existing blocks.
 - Use the timezone offset {offset} on every start_time and end_time.
 - Every block starts exactly on the hour (e.g. 08:00, 13:00), never at :15, :30 or :45.
-- Work blocks are 1 or 2 whole hours long, placed back to back with no breaks (the user adds breaks).
+- Work blocks are 1 to 3 whole hours long, placed back to back with no breaks (the user adds breaks).
 - The first block of the day starts at 08:00 (unless an existing block already covers 08:00). No block ends after 22:00.
-- Include one "Gym" block of exactly 1.5 hours, starting on the hour between 10:00 and 12:00 so it ends by 14:00,
+- Include one "Gym" block of exactly 1.5 hours, starting on the hour between 10:00 and 14:00 so it ends by 16:00,
   unless the existing blocks already contain a gym session. The block after the gym starts at the next full hour.
-- All Todoist tasks given are top priority. Schedule overdue or due-tomorrow ones first, then the rest.
+- Prioritise Todoist tasks that are overdue or due tomorrow, then by priority (4 = most urgent).
 - Aim for about {target_hours:.1f} more hours of scheduled work."""
+
 
 
 def _valid_new_events(plan: DailySchedulePlan, tomorrow: date, existing: list[dict]) -> list[dict]:
